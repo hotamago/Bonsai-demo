@@ -68,3 +68,7 @@ Khi proxy sửa một request ảnh, nó in:
   (`providers: { llama.cpp: { modelOverrides: { bonsai2-27b: { api: openai-completions } } } }`)
   để omp dùng `/v1/chat/completions`. Nhưng phải làm cho **mỗi** omp → kém tiện hơn fix server.
 - Chỉ REQUEST bị sửa; response giữ nguyên nên streaming/định dạng không đổi.
+- Proxy chuyển tiếp body trả về bằng `read1()` (đọc được bao nhiêu gửi bấy nhiêu). Bản đầu dùng
+  `read(65536)`, với body chunked (SSE) nó chờ đủ 64 KB mới gửi, nên token stream về một cục ở
+  cuối và các nhịp `:` 30 giây của llama-server lúc prefill dài bị giữ lại.
+- Chạy trên server Linux bằng Docker: xem [deploy/linux-cuda/README.md](deploy/linux-cuda/README.md).

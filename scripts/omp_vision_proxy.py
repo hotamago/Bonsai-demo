@@ -143,7 +143,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             while True:
-                chunk = resp.read(65536)
+                # read1, not read: on a chunked (SSE) body read(n) blocks until n bytes
+                # have arrived, which holds back streamed tokens and llama-server's
+                # 30 s ":" heartbeats during a long prefill (idle-timeout proxies such
+                # as Cloudflare then close the request).
+                chunk = resp.read1(65536)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
