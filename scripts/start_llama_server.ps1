@@ -5,27 +5,29 @@ $ErrorActionPreference = "Stop"
 $BonsaiModel  = if ($env:BONSAI_MODEL)  { $env:BONSAI_MODEL.ToUpperInvariant() } else { "27B" }
 $BonsaiFamily = if ($env:BONSAI_FAMILY) { $env:BONSAI_FAMILY.ToLowerInvariant() } else { "bonsai2" }
 
-if ($BonsaiModel -notin @("27B", "9B", "8B", "4B", "2B", "1.7B")) {
-    Write-Host "[ERR] Unknown BONSAI_MODEL='$BonsaiModel'. Valid values: 27B, 9B, 8B, 4B, 2B, 1.7B" -ForegroundColor Red
-    exit 1
-}
-if ($BonsaiFamily -notin @("bonsai2", "bonsai", "ternary")) {
-    Write-Host "[ERR] Unknown BONSAI_FAMILY='$BonsaiFamily'. Valid values: bonsai2, bonsai, ternary" -ForegroundColor Red
-    exit 1
-}
-if ($BonsaiFamily -in @("bonsai", "ternary") -and $BonsaiModel -in @("9B", "2B")) {
-    Write-Error "${BonsaiModel} requires BONSAI_FAMILY=bonsai2"
-    exit 1
-}
-# Validate Bonsai 2 sizes. Without this, another size walks into a directory that was
-# never going to exist and the error blames setup. Mirrors BONSAI2_SIZES in
-# scripts/common.sh.
-$Bonsai2Sizes = if ($env:BONSAI2_SIZES) { $env:BONSAI2_SIZES -split '\s+' } else { @("27B", "9B", "4B", "2B") }
-if ($BonsaiFamily -eq "bonsai2" -and $BonsaiModel -notin $Bonsai2Sizes) {
-    Write-Host "[ERR] Bonsai 2 sizes: $Bonsai2Sizes." -ForegroundColor Red
-    Write-Host "      Bonsai 2:     `$env:BONSAI_MODEL='27B'; .\scripts\start_llama_server.ps1" -ForegroundColor Yellow
-    Write-Host "      Other sizes:  `$env:BONSAI_FAMILY='ternary'; .\scripts\start_llama_server.ps1" -ForegroundColor Yellow
-    exit 1
+if (-not $env:BONSAI_GGUF) {
+    if ($BonsaiModel -notin @("27B", "9B", "8B", "4B", "2B", "1.7B")) {
+        Write-Host "[ERR] Unknown BONSAI_MODEL='$BonsaiModel'. Valid values: 27B, 9B, 8B, 4B, 2B, 1.7B" -ForegroundColor Red
+        exit 1
+    }
+    if ($BonsaiFamily -notin @("bonsai2", "bonsai", "ternary")) {
+        Write-Host "[ERR] Unknown BONSAI_FAMILY='$BonsaiFamily'. Valid values: bonsai2, bonsai, ternary" -ForegroundColor Red
+        exit 1
+    }
+    if ($BonsaiFamily -in @("bonsai", "ternary") -and $BonsaiModel -in @("9B", "2B")) {
+        Write-Error "${BonsaiModel} requires BONSAI_FAMILY=bonsai2"
+        exit 1
+    }
+    # Validate Bonsai 2 sizes. Without this, another size walks into a directory that was
+    # never going to exist and the error blames setup. Mirrors BONSAI2_SIZES in
+    # scripts/common.sh.
+    $Bonsai2Sizes = if ($env:BONSAI2_SIZES) { $env:BONSAI2_SIZES -split '\s+' } else { @("27B", "9B", "4B", "2B") }
+    if ($BonsaiFamily -eq "bonsai2" -and $BonsaiModel -notin $Bonsai2Sizes) {
+        Write-Host "[ERR] Bonsai 2 sizes: $Bonsai2Sizes." -ForegroundColor Red
+        Write-Host "      Bonsai 2:     `$env:BONSAI_MODEL='27B'; .\scripts\start_llama_server.ps1" -ForegroundColor Yellow
+        Write-Host "      Other sizes:  `$env:BONSAI_FAMILY='ternary'; .\scripts\start_llama_server.ps1" -ForegroundColor Yellow
+        exit 1
+    }
 }
 
 $DemoDir = Split-Path $PSScriptRoot -Parent
@@ -33,7 +35,7 @@ Set-Location $DemoDir
 
 # Bind to localhost by default; override with BONSAI_HOST=0.0.0.0 for LAN/remote.
 $HostAddress = if ($env:BONSAI_HOST) { $env:BONSAI_HOST } else { "127.0.0.1" }
-$Port = 8080
+$Port = if ($env:BONSAI_PORT) { [int]$env:BONSAI_PORT } else { 8080 }
 
 try {
     $null = Invoke-WebRequest -Uri "http://localhost:$Port/health" -TimeoutSec 2
@@ -45,21 +47,6 @@ try {
 # launch, not just the ones where the KV4 bias block below sets it.
 $priorRotDisable = $env:LLAMA_ATTN_ROT_DISABLE
 
-if ($BonsaiFamily -eq "bonsai2") {
-    $ModelDir = Join-Path $DemoDir "models\bonsai2-gguf\$BonsaiModel"
-    $FamilyDisplay = "Bonsai-2"
-} elseif ($BonsaiFamily -eq "ternary") {
-    $ModelDir = Join-Path $DemoDir "models\ternary-gguf\$BonsaiModel"
-
-    $FamilyDisplay = "Ternary-Bonsai"
-} else {
-    $ModelDir = Join-Path $DemoDir "models\gguf\$BonsaiModel"
-    $FamilyDisplay = "Bonsai"
-}
-
-$Display = "$FamilyDisplay-$BonsaiModel"
-# Select exactly the demo quant for the family (a leftover F16 or g64 file
-# must never be picked up).
 $BinCandidates = @(
     "bin\cuda\llama-server.exe",
     "bin\hip\llama-server.exe",
@@ -73,49 +60,80 @@ $BinRel = $null
 foreach ($cand in $BinCandidates) {
     if (Test-Path (Join-Path $DemoDir $cand)) { $BinRel = $cand; break }
 }
-$Pq2Ready = $BinRel -notlike "bin\vulkan\*"
-if ($BonsaiFamily -eq "bonsai2") {
-    # Every Bonsai 2 band needs the fork's kernels, so there is no group-64 fallback.
-    $tryPatterns = @("*-PQ2_0.gguf", "*-PTQ1_0.gguf")
-} elseif ($BonsaiFamily -eq "ternary") {
-    # PQ2_0 where the backend has kernels (see MODEL-FORMATS.md); official group-64
-    # otherwise (*g64 on pre-v7 repos, plain *-Q2_0 on newer repos).
-    # BONSAI_FORCE_G64=1 skips PQ2_0 regardless of backend.
-    $tryPatterns = if ($env:BONSAI_FORCE_G64 -eq "1" -or -not $Pq2Ready) { @("*g64.gguf", "*-Q2_0.gguf") }
-                   else { @("*-PQ2_0.gguf", "*g64.gguf", "*-Q2_0.gguf") }
-} else {
-    $tryPatterns = @("*-Q1_0.gguf")
-}
-foreach ($qp in $tryPatterns) {
-    # plain *-Q2_0.gguf is only trusted with the downloader's .official-q2_0 marker
-    # (newer repos); otherwise it is a deprecated legacy leftover v7 refuses to load
-    if ($qp -eq "*-Q2_0.gguf" -and -not (Test-Path (Join-Path $ModelDir ".official-q2_0"))) { continue }
-    $Model = Get-ChildItem -Path $ModelDir -Filter $qp -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notlike "*mmproj*" -and $_.Name -notlike "*dspark*" -and $_.Name -notlike "*kv-bias*" } |
-        Select-Object -First 1
-    if ($Model) { break }
-}
-if (-not $Model) {
-    Write-Host "[ERR] No model file found for $Display in $ModelDir" -ForegroundColor Red
-    Write-Host "      Run .\setup.ps1 first." -ForegroundColor Yellow
-    exit 1
-}
-
-# Vision: use the multimodal projector when present (27B is a VLM).
-$Mmproj = Get-ChildItem -Path $ModelDir -Filter *mmproj*.gguf -File -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($BonsaiModel -eq "27B" -and -not $Mmproj) {
-    Write-Host "[WARN] No mmproj file found in $ModelDir - image input disabled." -ForegroundColor Yellow
-    Write-Host "       Re-run setup.ps1 to fetch it." -ForegroundColor Yellow
-}
-
 if (-not $BinRel) {
     Write-Host "[ERR] llama-server.exe not found. Run .\setup.ps1 first." -ForegroundColor Red
     exit 1
 }
-
 $Bin = Join-Path $DemoDir $BinRel
 $BinDir = Split-Path $Bin -Parent
 $env:Path = "$BinDir;$env:Path"
+
+if ($env:BONSAI_GGUF) {
+    $rawModel = $env:BONSAI_GGUF
+    if (-not [System.IO.Path]::IsPathRooted($rawModel)) {
+        $rawModel = Join-Path $DemoDir $rawModel
+    }
+    if (-not (Test-Path $rawModel -PathType Leaf)) {
+        Write-Host "[ERR] BONSAI_GGUF='$($env:BONSAI_GGUF)' does not exist." -ForegroundColor Red
+        exit 1
+    }
+    $Model = Get-Item $rawModel
+    $ModelDir = $Model.DirectoryName
+    $Display = $Model.Name
+    $Mmproj = $null
+    if ($env:BONSAI_MMPROJ) {
+        $rawMmproj = $env:BONSAI_MMPROJ
+        if (-not [System.IO.Path]::IsPathRooted($rawMmproj)) {
+            $rawMmproj = Join-Path $DemoDir $rawMmproj
+        }
+        if (-not (Test-Path $rawMmproj -PathType Leaf)) {
+            Write-Host "[ERR] BONSAI_MMPROJ='$($env:BONSAI_MMPROJ)' does not exist." -ForegroundColor Red
+            exit 1
+        }
+        $Mmproj = Get-Item $rawMmproj
+    } else {
+        $Mmproj = Get-ChildItem -Path $ModelDir -Filter *mmproj*.gguf -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+} else {
+    if ($BonsaiFamily -eq "bonsai2") {
+        $ModelDir = Join-Path $DemoDir "models\bonsai2-gguf\$BonsaiModel"
+        $FamilyDisplay = "Bonsai-2"
+    } elseif ($BonsaiFamily -eq "ternary") {
+        $ModelDir = Join-Path $DemoDir "models\ternary-gguf\$BonsaiModel"
+        $FamilyDisplay = "Ternary-Bonsai"
+    } else {
+        $ModelDir = Join-Path $DemoDir "models\gguf\$BonsaiModel"
+        $FamilyDisplay = "Bonsai"
+    }
+    $Display = "$FamilyDisplay-$BonsaiModel"
+    $Pq2Ready = $BinRel -notlike "bin\vulkan\*"
+    if ($BonsaiFamily -eq "bonsai2") {
+        $tryPatterns = @("*-PQ2_0.gguf", "*-PTQ1_0.gguf")
+    } elseif ($BonsaiFamily -eq "ternary") {
+        $tryPatterns = if ($env:BONSAI_FORCE_G64 -eq "1" -or -not $Pq2Ready) { @("*g64.gguf", "*-Q2_0.gguf") }
+                       else { @("*-PQ2_0.gguf", "*g64.gguf", "*-Q2_0.gguf") }
+    } else {
+        $tryPatterns = @("*-Q1_0.gguf")
+    }
+    foreach ($qp in $tryPatterns) {
+        if ($qp -eq "*-Q2_0.gguf" -and -not (Test-Path (Join-Path $ModelDir ".official-q2_0"))) { continue }
+        $Model = Get-ChildItem -Path $ModelDir -Filter $qp -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "*mmproj*" -and $_.Name -notlike "*dspark*" -and $_.Name -notlike "*kv-bias*" } |
+            Select-Object -First 1
+        if ($Model) { break }
+    }
+    if (-not $Model) {
+        Write-Host "[ERR] No model file found for $Display in $ModelDir" -ForegroundColor Red
+        Write-Host "      Run .\setup.ps1 first." -ForegroundColor Yellow
+        exit 1
+    }
+
+    $Mmproj = Get-ChildItem -Path $ModelDir -Filter *mmproj*.gguf -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($BonsaiModel -eq "27B" -and -not $Mmproj) {
+        Write-Host "[WARN] No mmproj file found in $ModelDir - image input disabled." -ForegroundColor Yellow
+        Write-Host "       Re-run setup.ps1 to fetch it." -ForegroundColor Yellow
+    }
+}
 
 # Default context: RAM-tiered cap. BONSAI_CTX=0 or unset both mean "auto" ->
 # this tiered default (never -c 0, which uses the model's full training context
@@ -178,7 +196,7 @@ $ServerArgs = @(
 # image input; sampling matches the 27B reference demo (temp 0.7, top-p 0.95);
 # thinking stays enabled (reasoning overrides removed).
 # Older sizes keep the exact flag set they were tested with.
-if ($BonsaiModel -eq "27B" -or $BonsaiFamily -eq "bonsai2") {
+if ($BonsaiModel -eq "27B" -or $BonsaiFamily -eq "bonsai2" -or $env:BONSAI_GGUF) {
     # Speculative decoding (opt-in, BONSAI_SPECULATIVE=1): pair the target with
     # its dspark drafter for ~1.8-2x decode on code/reasoning. Disables
     # prompt-cache reuse and forces a single slot, so it is off by default and
@@ -260,6 +278,21 @@ if ($BonsaiModel -eq "27B" -or $BonsaiFamily -eq "bonsai2") {
     # them in Settings -> MCP Client).
     $WebuiConfig = Join-Path $PSScriptRoot "webui-config.json"
     if (Test-Path $WebuiConfig) { $ServerArgs += @("--webui-config-file", $WebuiConfig) }
+}
+
+$ModelAlias = if ($env:BONSAI_ALIAS) {
+    $env:BONSAI_ALIAS
+} elseif ($env:BONSAI_GGUF) {
+    $Model.BaseName
+} else {
+    $Display
+}
+$hasAliasInArgs = $false
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ($args[$i] -in @("--alias", "-a")) { $hasAliasInArgs = $true; break }
+}
+if (-not $hasAliasInArgs -and $ModelAlias) {
+    $ServerArgs += @("--alias", $ModelAlias)
 }
 
 $EffCtx = if ($BonsaiModel -eq "27B" -or $BonsaiFamily -eq "bonsai2") { $Ctx } else { $CtxDefault }

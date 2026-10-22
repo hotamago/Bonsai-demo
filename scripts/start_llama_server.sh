@@ -193,6 +193,20 @@ if [ "$_full_profile" = "1" ]; then
         fi
     fi
 
+    _alias="${BONSAI_ALIAS:-}"
+    if [ -z "$_alias" ]; then
+        if [ -n "${BONSAI_GGUF:-}" ]; then
+            _alias="$(basename "$MODEL" .gguf)"
+        else
+            _alias="$BONSAI_DISPLAY"
+        fi
+    fi
+    _has_alias=""
+    for _arg in "$@"; do
+        case "$_arg" in --alias|-a) _has_alias=1; break ;; esac
+    done
+    [ -z "$_has_alias" ] && [ -n "$_alias" ] && set -- --alias "$_alias" "$@"
+
     echo "  Context: -c $_ctx (override with BONSAI_CTX, 0 = auto)"
     _mmproj_cpu=""
     [ -n "$MMPROJ" ] && _mmproj_cpu=$(bonsai_mmproj_offload_flag)
