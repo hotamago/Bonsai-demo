@@ -1,0 +1,8 @@
+# Build context is the repo root; send only what the Dockerfile copies.
+*
+!scripts/common.sh
+!scripts/start_llama_server.sh
+!scripts/webui-config.json
+!deploy/linux-cuda/entrypoint.sh
+!deploy/linux-cuda/build/llama-*-bin-linux-cuda-13.3-x64.tar.gz
+!deploy/linux-cuda/build/libgomp1_*.deb

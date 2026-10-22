@@ -354,6 +354,19 @@ For earlier-model memory tables, see [Bonsai 1 context and memory](Bonsai1_READM
 
 ---
 
+## Linux server with Docker (NVIDIA)
+
+[`deploy/linux-cuda/`](deploy/linux-cuda/README.md) runs the 27B as a Docker Compose service:
+`llama-server` from the pinned fork release (prebuilt CUDA 13.3) behind the
+[omp vision proxy](OMP-VISION-FIX.md), API-key protected, restarting by itself, published on
+the server's loopback only. Reach it from your machine with an SSH tunnel:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 <user>@<server>   # then use http://127.0.0.1:8080 as usual
+```
+
+---
+
 ## Building from Source
 
 If you prefer to build llama.cpp from source instead of using pre-built binaries:

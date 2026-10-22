@@ -1,0 +1,69 @@
+# Bonsai on a Linux NVIDIA host: llama-server (PrismML fork, CUDA) behind the
+# omp vision proxy.
+#
+#   client -> 127.0.0.1:${BONSAI_PUBLIC_PORT:-8080} (proxy) -> llama:8081 (llama-server)
+#
+# Only the proxy is published, and only on the host's loopback. See README.md here.
+name: bonsai
+
+services:
+  llama:
+    image: bonsai-llama:prism-b10787-73bfe6c-cuda13.3
+    build:
+      context: ../..
+      dockerfile: deploy/linux-cuda/Dockerfile
+    restart: unless-stopped
+    gpus: all
+    environment:
+      LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      BONSAI_GGUF: /models/${BONSAI_GGUF_FILE:?set BONSAI_GGUF_FILE in .env}
+      BONSAI_MMPROJ: ${BONSAI_MMPROJ_FILE:+/models/${BONSAI_MMPROJ_FILE}}
+      BONSAI_ALIAS: ${BONSAI_ALIAS:-}
+      BONSAI_MODEL: ${BONSAI_MODEL:-27B}
+      BONSAI_CTX: ${BONSAI_CTX:-128000}
+      BONSAI_KV4: ${BONSAI_KV4:-1}
+      BONSAI_NGL: ${BONSAI_NGL:-99}
+      BONSAI_IMAGE_MAX_TOKENS: ${BONSAI_IMAGE_MAX_TOKENS:-0}
+      BONSAI_MMPROJ_CPU: ${BONSAI_MMPROJ_CPU:-0}
+      BONSAI_EXTRA_ARGS: ${BONSAI_EXTRA_ARGS:--np 1 --ctx-checkpoints 4}
+    volumes:
+      - ${MODELS_DIR:-../../models}:/models:ro
+    expose:
+      - "8081"
+    healthcheck:
+      # no curl in the CUDA image; /health is exempt from the API key
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q ' 200 '"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  proxy:
+    image: python:3.13.17-slim-trixie
+    restart: unless-stopped
+    depends_on:
+      llama:
+        condition: service_healthy
+    command: ["python", "-u", "/app/omp_vision_proxy.py"]
+    environment:
+      BONSAI_PROXY_HOST: 0.0.0.0
+      BONSAI_PROXY_PORT: "8080"
+      BONSAI_UPSTREAM_HOST: llama
+      BONSAI_UPSTREAM_PORT: "8081"
+    volumes:
+      - ../../scripts/omp_vision_proxy.py:/app/omp_vision_proxy.py:ro
+    ports:
+      - "${BONSAI_BIND:-127.0.0.1}:${BONSAI_PUBLIC_PORT:-8080}:8080"
+    healthcheck:
+      # goes through to llama-server, so "healthy" means the whole chain answers
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=8).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
