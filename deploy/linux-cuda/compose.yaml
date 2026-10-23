@@ -30,6 +30,8 @@ services:
       - ${MODELS_DIR:-../../models}:/models:ro
     expose:
       - "8081"
+    labels:
+      bonsai.autoheal: "true"
     healthcheck:
       # no curl in the CUDA image; /health is exempt from the API key
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q ' 200 '"]
@@ -57,6 +59,8 @@ services:
       - ../../scripts/omp_vision_proxy.py:/app/omp_vision_proxy.py:ro
     ports:
       - "${BONSAI_BIND:-127.0.0.1}:${BONSAI_PUBLIC_PORT:-8080}:8080"
+    labels:
+      bonsai.autoheal: "true"
     healthcheck:
       # goes through to llama-server, so "healthy" means the whole chain answers
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=8).status == 200 else 1)"]
@@ -67,3 +71,21 @@ services:
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "3" }
+
+  # Docker restarts a container that exits, not one that hangs. autoheal restarts
+  # containers that turn unhealthy, but only those labelled bonsai.autoheal=true (the
+  # two services above), never anything else on the host.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: bonsai.autoheal
+      AUTOHEAL_INTERVAL: "10"
+      AUTOHEAL_START_PERIOD: "60"
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: "20"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }

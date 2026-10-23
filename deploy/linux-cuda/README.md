@@ -36,11 +36,11 @@ sed -i "s/^LLAMA_API_KEY=.*/LLAMA_API_KEY=$(openssl rand -hex 32)/" .env   # the
 ./fetch.sh images         # only if dockerd cannot pull from Docker Hub itself (see below)
 docker compose build
 docker compose up -d
-docker compose ps         # both services "healthy" after ~10-60 s
+docker compose ps         # llama and proxy "healthy" after ~10-60 s, autoheal running
 ```
 
 Behind a restricted network, prefix the fetches with a proxy, e.g.
-`ALL_PROXY=socks5h://127.0.0.1:40000 ./fetch.sh all`. `fetch.sh images` pulls the two base
+`ALL_PROXY=socks5h://127.0.0.1:40000 ./fetch.sh all`. `fetch.sh images` pulls the base
 images with [crane](https://github.com/google/go-containerregistry) through the same proxy
 and `docker load`s them, so the docker daemon needs no proxy and no restart.
 

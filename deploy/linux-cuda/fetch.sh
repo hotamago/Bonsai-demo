@@ -32,7 +32,7 @@ mmproj-Q8_0.gguf 6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d63190
 
 CRANE_VERSION="v0.22.1"
 CRANE_SHA256="0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0"
-IMAGES="nvidia/cuda:13.3.1-runtime-ubuntu24.04 python:3.13.17-slim-trixie"
+IMAGES="nvidia/cuda:13.3.1-runtime-ubuntu24.04 python:3.13.17-slim-trixie willfarrell/autoheal:1.2.0"
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf '[ERR] %s\n' "$*" >&2; exit 1; }
